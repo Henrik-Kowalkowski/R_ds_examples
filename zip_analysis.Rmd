@@ -1,17 +1,27 @@
 ---
-title: "R Zillow Metro House Prices"
+title: "R Zillow Twin Cities Zip House Prices"
 author: "Henrik Kowalkowski"
 date: "12/9/2021"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo=F, message=F)
 library(tidyverse)
 library(here)
 library(skimr)
 library(lubridate)
 library(magrittr)
+library(leaflet)
+library(tigris)
+library(sf)
+library(glue)
+library(htmltools)
+
+options(tigris_use_cache=T)
 ```
 
 ```{r}
@@ -21,12 +31,62 @@ data_long <- data_wide %>%
   mutate(date = as_date(date), year=year(date), month=month(date)) %>%
   filter(year == 2020, State == "MN")
 ```
-
+  
+  
+# Data Overview
 ```{r}
 skim(data_long)
 ```
+  
+  
+# Mean Annual Zillow Home Value Index (ZHVI) 2020
+```{r}
+twin_cities <- data_long %>% 
+  filter(CountyName %in% c("Hennepin County", "Ramsey County"))
+
+twin_cities %<>% group_by(RegionName, State, City, Metro, CountyName) %>% 
+  summarize(mean_ann_zhvi = mean(zhvi), .groups="drop")
+```
+
 
 ```{r}
+zip_shp <- zctas(cb=T, starts_with=twin_cities$RegionName, year=2019) %>%
+  st_transform('+proj=longlat +datum=WGS84')
+```
 
+```{r}
+geo_twin_cities <- left_join(zip_shp, twin_cities, by=c("ZCTA5CE10"="RegionName"))
+```
+
+```{r}
+geo_twin_cities %<>% mutate(label = glue("State: {State}
+                                        <br>County: {CountyName}
+                                        <br>City: {City}
+                                        <br>Metro: {Metro}
+                                        <br>Mean Annual ZHVI: {scales::dollar(mean_ann_zhvi, accuracy=1)}"))
+```
+
+```{r}
+pal <- colorNumeric("Blues", domain=geo_twin_cities$mean_ann_zhvi)
+```
+
+
+```{r}
+leaflet() %>%
+  addProviderTiles(providers$Stamen.TonerLite,
+                   options=providerTileOptions(opacity=0.5)) %>%
+  addPolygons(data=geo_twin_cities$geometry,
+              smoothFactor=1,
+              weight=0.5,
+              color="black",
+              fillColor=pal(geo_twin_cities$mean_ann_zhvi),
+              fillOpacity=0.6,
+              highlightOptions=highlightOptions(color="white", 
+                                                weight=6, 
+                                                bringToFront=T),
+              label=lapply(geo_twin_cities$label, HTML),
+              labelOptions=labelOptions(textsize="15px")) %>%
+  addLegend(pal=pal, values=geo_twin_cities$mean_ann_zhvi, opacity=0.6,
+            labFormat=labelFormat(prefix="$"), title="Mean Annual ZHVI")
 ```
 
