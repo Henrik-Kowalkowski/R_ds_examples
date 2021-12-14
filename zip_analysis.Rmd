@@ -1,92 +1,130 @@
 ---
-title: "R Zillow Twin Cities Zip House Prices"
+title: "Work in progress"
 author: "Henrik Kowalkowski"
-date: "12/9/2021"
-output: 
-  html_document:
-    toc: true
-    toc_depth: 2
+date: "12/2021"
+output: html_document
 ---
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo=F, message=F)
 library(tidyverse)
 library(here)
-library(skimr)
 library(lubridate)
 library(magrittr)
 library(leaflet)
+library(leaflet.extras2)
 library(tigris)
 library(sf)
 library(glue)
 library(htmltools)
+library(manipulateWidget)
 
 options(tigris_use_cache=T)
 ```
 
 ```{r}
 data_wide <- read_csv(here("data","Zip_zhvi_uc_sfr_tier_0.33_0.67_sm_sa_month.csv"))
+years <- c(2013, 2015, 2017, 2019)
+
 data_long <- data_wide %>% 
+  filter((State == "MN" & CountyName %in% c("Hennepin County", "Ramsey County")) |
+         (State == "IL" & CountyName == "Cook County") |
+         (State == "MO" & CountyName %in% c("Saint Louis City", "Saint Louis County")) |
+         (State == "MA" & CountyName %in% c("Suffolk County", "Middlesex County", "Norfolk County")) |
+         (State == "CA" & CountyName == "Los Angeles County")) %>%
   pivot_longer(cols=matches("^\\d{4}-\\d{2}-\\d{2}$"),  names_to="date", values_to="zhvi") %>%
   mutate(date = as_date(date), year=year(date), month=month(date)) %>%
-  filter(year == 2020, State == "MN")
+  filter(year %in% years)
 ```
-  
-  
-# Data Overview
-```{r}
-skim(data_long)
-```
-  
-  
-# Mean Annual Zillow Home Value Index (ZHVI) 2020
-```{r}
-twin_cities <- data_long %>% 
-  filter(CountyName %in% c("Hennepin County", "Ramsey County"))
 
-twin_cities %<>% group_by(RegionName, State, City, Metro, CountyName) %>% 
+```{r}
+data_grouped <- data_long %>% 
+  group_by(RegionName, State, City, Metro, CountyName, year) %>% 
   summarize(mean_ann_zhvi = mean(zhvi), .groups="drop")
 ```
 
-
 ```{r}
-zip_shp <- zctas(cb=T, starts_with=twin_cities$RegionName, year=2019) %>%
-  st_transform('+proj=longlat +datum=WGS84')
+shp_files <- lapply(years, zctas, 
+                    cb=TRUE, starts_with=unique(data_grouped$RegionName)) %>% 
+  lapply(st_transform, crs="+proj=longlat +datum=WGS84") %>%
+  setNames(glue("year_{years}"))
 ```
 
 ```{r}
-geo_twin_cities <- left_join(zip_shp, twin_cities, by=c("ZCTA5CE10"="RegionName"))
+get_year <- function(data, year_name){
+  data$year = as.integer(str_split(year_name, "_")[[1]][2])
+  return(data)
+}
+
+data_shp <- mapply(get_year,
+       data=shp_files,
+       year_name=names(shp_files),
+       SIMPLIFY=F) %>% bind_rows()
+
+data_geo <- left_join(data_shp, data_grouped, 
+                      by=c("ZCTA5CE10"="RegionName", "year"="year"))
 ```
 
 ```{r}
-geo_twin_cities %<>% mutate(label = glue("State: {State}
-                                        <br>County: {CountyName}
-                                        <br>City: {City}
-                                        <br>Metro: {Metro}
-                                        <br>Mean Annual ZHVI: {scales::dollar(mean_ann_zhvi, accuracy=1)}"))
+data_geo %<>% mutate(label = glue("<br>Metro: {Metro}
+                                   <br>County: {CountyName}
+                                   <br>City: {City}
+                                   <br>Zip: {ZCTA5CE10}
+                                   <br>Mean Annual ZHVI: {scales::dollar(mean_ann_zhvi, accuracy=1)}"))
 ```
 
 ```{r}
-pal <- colorNumeric("Blues", domain=geo_twin_cities$mean_ann_zhvi)
-```
+colors <- c("#ff7f7f","#ff0000","#ffc966","#ffa500","#ffff7f",
+            "#ffff00","#7fbf7f","#008000","#3232ff","#1919ff","#800080")
+bins <- c(0, 5e4, 1e5, 2e5, 3e5, 4e5, 5e5, 6e5, 1e6, 2e6, 4e6, Inf)
+labels <- c("< $50K", "$50-100K", "$100-200K", "$200-300K", "$300-400K", 
+            "$400-500K", "$500-600K", "$600K-1M", "$1-2M", "$2-4M", "> $4M")
 
+```
 
 ```{r}
-leaflet() %>%
-  addProviderTiles(providers$Stamen.TonerLite,
-                   options=providerTileOptions(opacity=0.5)) %>%
-  addPolygons(data=geo_twin_cities$geometry,
-              smoothFactor=1,
-              weight=0.5,
-              color="black",
-              fillColor=pal(geo_twin_cities$mean_ann_zhvi),
-              fillOpacity=0.6,
-              highlightOptions=highlightOptions(color="white", 
-                                                weight=6, 
-                                                bringToFront=T),
-              label=lapply(geo_twin_cities$label, HTML),
-              labelOptions=labelOptions(textsize="15px")) %>%
-  addLegend(pal=pal, values=geo_twin_cities$mean_ann_zhvi, opacity=0.6,
-            labFormat=labelFormat(prefix="$"), title="Mean Annual ZHVI")
+build_leaflet <- function(yr, data){
+  d <- data %>% filter(year==yr)
+  
+  pal <- colorBin(palette=colors, domain=d$mean_ann_zhvi, bins=bins, na.color="grey")
+
+  p <- leaflet() %>%
+    addProviderTiles(providers$Stamen.TonerLite) %>%
+    addPolygons(data=d,
+                smoothFactor=1,
+                weight=0.5,
+                color="black",
+                fillColor=pal(d$mean_ann_zhvi),
+                fillOpacity=0.2,
+                highlightOptions=highlightOptions(color="white",
+                                                  weight=6,
+                                                  bringToFront=T),
+                label=lapply(d$label, HTML),
+                labelOptions=labelOptions(textsize="15px")) %>%
+    addLegend(labels=labels, colors=colors, values=d$mean_ann_zhvi, opacity=0.6,
+              labFormat=labelFormat(prefix="$"), 
+              title=glue("Mean Annual ZHVI<br>in {yr}"))
+  
+  return(p)
+}
 ```
 
+```{r}
+plots <- lapply(years, build_leaflet, data=data_geo) %>% 
+  setNames(glue("year_{years}"))
+```
+
+<br><br>
+Mean annual Zillow Home Value Index values
+<br><br>
+```{r}
+combineWidgets(list=plots, ncol=2, width="1600px", height="900px")
+```
