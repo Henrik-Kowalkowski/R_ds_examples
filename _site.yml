@@ -1,7 +1,9 @@
-name: "my-website"
+name: "R Zillow House Prices"
 navbar:
-  title: "My Website"
+  title: "R Zillow House Prices"
   left:
     - text: "Home"
       href: index.html
+    - text: "Zip Code Analysis"
+      href: zip_analysis.html
 output_dir: "docs"
