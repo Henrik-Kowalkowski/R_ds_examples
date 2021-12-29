@@ -128,3 +128,41 @@ Mean annual Zillow Home Value Index values
 ```{r}
 combineWidgets(list=plots, ncol=2, width="1600px", height="900px")
 ```
+
+```{r}
+data_change <- data_geo %>% 
+  st_drop_geometry() %>%
+  filter(year %in% c(2013, 2019)) %>%
+  group_by(State, Metro, CountyName, City, ZCTA5CE10) %>% 
+  arrange(year, .by_group = T) %>%
+  mutate(pct_change = (mean_ann_zhvi/lag(mean_ann_zhvi) - 1) * 100,
+         cagr = (((mean_ann_zhvi/lag(mean_ann_zhvi))**(1/(year-lag(year))))-1)*100) %>%
+  select(State, Metro, CountyName, City, ZCTA5CE10, year, mean_ann_zhvi, 
+         pct_change, cagr)
+```
+
+```{r}
+data_change %>% filter(pct_change < 0)
+```
+```{r}
+get_quantiles <- function(columns, probs){
+  p_names <- map_chr(probs, ~glue("pct_{.x*100}"))
+  p_funs <- map(probs, ~partial(quantile, probs=.x, na.rm=T)) %>%
+                  set_names(nm=p_names)
+  
+  p_funs
+}
+
+pctiles <- data_change %>% ungroup() %>%
+  summarize_at(vars(pct_change), get_quantiles(probs=seq(0,1,0.25)))
+```
+
+```{r}
+data_change %>% filter(pct_change > pctiles$pct_75) %>% arrange(desc(pct_change))
+```
+```{r}
+data_change %>% ungroup() %>%
+  summarize_at(vars(cagr, pct_change), get_quantiles(probs=seq(0,1,0.25))) %>%
+  pivot_longer(everything(), names_to="pctile", values_to="cagr")
+```
+
